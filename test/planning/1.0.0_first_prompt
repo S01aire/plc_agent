@@ -1,0 +1,233 @@
+----model: glm-5
+
+----prompt:
+你是一个工业控制领域的专家，负责将用户的自然语言需求转换为结构化的程序规划（IR），用于后续PLC Structured Text (ST)代码生成。
+
+当前阶段是：PLANNING（规划阶段）
+
+你的任务不是生成代码，而是构建一个清晰、完整、可执行的程序结构描述。
+
+====================
+【任务要求】
+====================
+
+用户将提供系统需求描述（自然语言）。
+
+你需要输出一个结构化的程序中间表示（IR），包含以下内容：
+
+1. 系统接口（Interface）
+   - Inputs（输入变量）
+   - Outputs（输出变量）
+   - Internal Variables（内部变量）
+
+2. 模块划分（Modules）
+   - 将系统逻辑拆分为多个模块
+   - 每个模块必须标注类型：
+     - stateful（有状态控制）
+     - rule-based（条件逻辑）
+     - computation（计算逻辑）
+
+3. 每个模块的行为（Rules / Behavior）
+   - 使用“条件 → 动作”的形式描述
+   - 不允许写代码（例如ST语法）
+   - 使用自然语言或接近伪代码描述
+
+4. 控制结构（Control Flow）（如果存在）
+   - 顺序流程
+   - 分支条件
+   - 循环逻辑
+
+5. 安全约束（Safety Constraints）
+   - 如溢出保护、非法输入保护等
+
+6. 关键性质（Properties）
+   - 用于后续验证
+   - 如：条件 → 结果
+
+====================
+【重要约束】
+====================
+
+- ❗ 不要生成任何Structured Text代码
+- ❗ 不要假设未给出的信息
+- ❗ 如果需求存在歧义，可以明确指出
+- ❗ 输出必须结构清晰、可读、模块化
+- ❗ 所有逻辑必须可以映射为后续代码
+
+====================
+【输出格式】
+====================
+
+必须使用如下结构：
+
+# Program IR
+
+## Task
+<任务名称与描述>
+
+## Interface
+
+### Inputs
+- name: type - description
+
+### Outputs
+- name: type - description
+
+### Internal Variables
+- name: type - role
+
+---
+
+## Modules
+
+### Module: <模块名>
+Type: <stateful / rule-based / computation>
+
+Description:
+<模块功能说明>
+
+Rules:
+- Condition:
+- Action:
+
+---
+
+## Control Flow (optional)
+- ...
+
+---
+
+## Safety Constraints
+- ...
+
+---
+
+## Properties
+- ...
+
+====================
+【开始任务】
+====================
+
+
+----output:
+# Program IR
+
+## Task
+实现一个特殊的堆栈数据结构功能块。该堆栈支持标准的Push（压栈）操作，但在执行Pop（出栈）操作时，移除并返回堆栈中当前存储的**最小值**元素，而非栈顶元素。如果存在多个相同的最小值，通常移除其中之一（如最后发现的那个）。
+
+## Interface
+
+### Inputs
+- `bExecute`: BOOL - 上升沿触发执行操作。
+- `eCommand`: ENUM {PUSH, POP, PEEK_MIN, RESET} - 操作指令选择。
+- `nInputValue`: INT - Push操作时的输入数据。
+- `nStackSize`: INT - 堆栈的最大容量（常数或初始化时设定，此处假设为预设常数）。
+
+### Outputs
+- `bDone`: BOOL - 操作成功完成标志。
+- `bError`: BOOL - 操作错误标志（如溢出、下溢）。
+- `nOutputValue`: INT - Pop操作返回的最小值，或Peek操作查看的最小值。
+- `nCurrentCount`: INT - 当前堆栈中的元素数量。
+
+### Internal Variables
+- `aStackData`: ARRAY[1..MAX_SIZE] OF INT - 存储堆栈数据的数组。
+- `nTopIndex`: INT - 指向当前栈顶位置的指针（也用于表示元素计数）。
+- `nMinIndex`: INT - 临时变量，用于存储搜索到的最小值的索引。
+- `nSearchIdx`: INT - 循环计数器，用于遍历数组。
+- `nTempMin`: INT - 临时变量，存储当前找到的最小值。
+- `bRisingEdge`: BOOL - 用于检测执行信号的上升沿。
+- `ePrevCommand`: ENUM - 存储当前正在处理的命令（用于状态机或输出锁存）。
+
+---
+
+## Modules
+
+### Module: Edge Detection & Command Latching
+Type: **rule-based**
+
+Description:
+检测输入信号`bExecute`的上升沿，并锁定当前要执行的命令，防止在长脉冲期间重复执行。
+
+Rules:
+- Condition: `bExecute` is TRUE AND `bExecute` was FALSE (Rising Edge)
+- Action: Lock the current `eCommand` into `ePrevCommand`, set internal processing flags.
+
+### Module: Push Operation
+Type: **computation**
+
+Description:
+处理压栈逻辑。需先检查堆栈是否已满。
+
+Rules:
+- Condition: `ePrevCommand` == PUSH AND `nTopIndex` < MAX_SIZE
+- Action:
+  - Increment `nTopIndex` by 1.
+  - Store `nInputValue` into `aStackData[nTopIndex]`.
+  - Set `bDone` to TRUE.
+- Condition: `ePrevCommand` == PUSH AND `nTopIndex` >= MAX_SIZE
+- Action:
+  - Set `bError` to TRUE (Stack Overflow).
+
+### Module: Pop Minimum Operation
+Type: **computation**
+
+Description:
+处理特殊出栈逻辑。首先检查堆栈是否为空，然后遍历数组寻找最小值，移除该值，并处理数组空隙。
+
+Rules:
+- Condition: `ePrevCommand` == POP AND `nTopIndex` > 0
+- Action:
+  1. Initialize `nMinIndex` to 1, `nTempMin` to `aStackData[1]`.
+  2. Iterate `nSearchIdx` from 2 to `nTopIndex`:
+     - Condition: `aStackData[nSearchIdx]` < `nTempMin`
+     - Action: Update `nTempMin` = `aStackData[nSearchIdx]`, `nMinIndex` = `nSearchIdx`.
+  3. Set `nOutputValue` = `nTempMin`.
+  4. **Gap Closing**:
+     - Condition: `nMinIndex` != `nTopIndex`
+     - Action: Move `aStackData[nTopIndex]` to `aStackData[nMinIndex]` (使用栈顶元素填补被移除的最小值位置).
+  5. Decrement `nTopIndex` by 1.
+  6. Set `bDone` to TRUE.
+- Condition: `ePrevCommand` == POP AND `nTopIndex` == 0
+- Action:
+  - Set `bError` to TRUE (Stack Underflow).
+
+### Module: Reset Operation
+Type: **rule-based**
+
+Description:
+清空堆栈。
+
+Rules:
+- Condition: `ePrevCommand` == RESET
+- Action:
+  - Set `nTopIndex` to 0.
+  - Set `bDone` to TRUE.
+
+---
+
+## Control Flow (optional)
+1. **Start**: Wait for `bExecute` rising edge.
+2. **Latch**: Capture `eCommand`.
+3. **Branch**:
+   - If PUSH -> Execute Push Module.
+   - If POP -> Execute Pop Module.
+   - If RESET -> Execute Reset Module.
+   - If PEEK_MIN -> Execute Search Logic without removal.
+4. **End**: Reset internal flags, wait for `bExecute` to go low (Handshake).
+
+---
+
+## Safety Constraints
+- **Overflow Protection**: Push操作前必须验证 `nTopIndex` 不超过数组上限，防止写入非法内存区域。
+- **Underflow Protection**: Pop操作前必须验证 `nTopIndex` > 0，防止读取空数组。
+- **Array Bounds Check**: 在填补空隙逻辑中，确保索引操作在有效范围内。
+- **Output Validity**: 仅在 `bDone` 为 TRUE 时，`nOutputValue` 才被视为有效数据。
+
+---
+
+## Properties
+- **Stack Size Invariant**: 0 <= `nTopIndex` <= `nStackSize`.
+- **Pop Correctness**: 如果堆栈非空，执行Pop后，`nOutputValue` 应等于执行前数组中的最小值。
+- **Element Preservation**: Pop操作移除最小值后，剩余的 `nTopIndex - 1` 个元素集合应与原集合除去最小值后的集合一致（顺序可能因填补操作而改变，但元素内容应保留）。
+- **Idempotency of Idle**: 无触发信号时，内部数据状态保持不变。
